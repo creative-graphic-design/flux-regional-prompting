@@ -30,10 +30,24 @@ from ...models.attention_processor import (
     FusedFluxAttnProcessor2_0,
 )
 from ...models.modeling_utils import ModelMixin
-from ...models.normalization import AdaLayerNormContinuous, AdaLayerNormZero, AdaLayerNormZeroSingle
-from ...utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
+from ...models.normalization import (
+    AdaLayerNormContinuous,
+    AdaLayerNormZero,
+    AdaLayerNormZeroSingle,
+)
+from ...utils import (
+    USE_PEFT_BACKEND,
+    is_torch_version,
+    logging,
+    scale_lora_layers,
+    unscale_lora_layers,
+)
 from ...utils.torch_utils import maybe_allow_in_graph
-from ..embeddings import CombinedTimestepGuidanceTextProjEmbeddings, CombinedTimestepTextProjEmbeddings, FluxPosEmbed
+from ..embeddings import (
+    CombinedTimestepGuidanceTextProjEmbeddings,
+    CombinedTimestepTextProjEmbeddings,
+    FluxPosEmbed,
+)
 from ..modeling_outputs import Transformer2DModelOutput
 
 
@@ -91,15 +105,17 @@ class FluxSingleTransformerBlock(nn.Module):
         residual = hidden_states
         norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
         mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
-        
-        # when using ControlNet, only one prompt is provided 
+
+        # when using ControlNet, only one prompt is provided
         if hidden_states_base is not None:
             residual_base = hidden_states_base
             norm_hidden_states_base, gate_base = self.norm(hidden_states_base, emb=temb)
-            mlp_hidden_states_base = self.act_mlp(self.proj_mlp(norm_hidden_states_base))
+            mlp_hidden_states_base = self.act_mlp(
+                self.proj_mlp(norm_hidden_states_base)
+            )
         else:
             norm_hidden_states_base = None
-                
+
         output = self.attn(
             hidden_states=norm_hidden_states,
             hidden_states_base=norm_hidden_states_base,
@@ -120,9 +136,11 @@ class FluxSingleTransformerBlock(nn.Module):
         hidden_states = residual + hidden_states
         if hidden_states.dtype == torch.float16:
             hidden_states = hidden_states.clip(-65504, 65504)
-        
-        if hidden_states_base is not None:  
-            hidden_states_base = torch.cat([attn_output_base, mlp_hidden_states_base], dim=2)
+
+        if hidden_states_base is not None:
+            hidden_states_base = torch.cat(
+                [attn_output_base, mlp_hidden_states_base], dim=2
+            )
             gate_base = gate_base.unsqueeze(1)
             hidden_states_base = gate_base * self.proj_out(hidden_states_base)
             hidden_states_base = residual_base + hidden_states_base
@@ -150,7 +168,9 @@ class FluxTransformerBlock(nn.Module):
             processing of `context` conditions.
     """
 
-    def __init__(self, dim, num_attention_heads, attention_head_dim, qk_norm="rms_norm", eps=1e-6):
+    def __init__(
+        self, dim, num_attention_heads, attention_head_dim, qk_norm="rms_norm", eps=1e-6
+    ):
         super().__init__()
 
         self.norm1 = AdaLayerNormZero(dim)
@@ -181,7 +201,9 @@ class FluxTransformerBlock(nn.Module):
         self.ff = FeedForward(dim=dim, dim_out=dim, activation_fn="gelu-approximate")
 
         self.norm2_context = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
-        self.ff_context = FeedForward(dim=dim, dim_out=dim, activation_fn="gelu-approximate")
+        self.ff_context = FeedForward(
+            dim=dim, dim_out=dim, activation_fn="gelu-approximate"
+        )
 
         # let chunk size default to None
         self._chunk_size = None
@@ -198,17 +220,23 @@ class FluxTransformerBlock(nn.Module):
         image_rotary_emb_base=None,
         additional_kwargs=None,
     ):
-        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
-
-        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
-            encoder_hidden_states, emb=temb
+        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(
+            hidden_states, emb=temb
         )
-        
+
+        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = (
+            self.norm1_context(encoder_hidden_states, emb=temb)
+        )
+
         # when using ControlNet, only one prompt is provided
         if encoder_hidden_states_base is not None:
-            norm_encoder_hidden_states_base, c_gate_msa_base, c_shift_mlp_base, c_scale_mlp_base, c_gate_mlp_base = self.norm1_context(
-                encoder_hidden_states_base, emb=temb
-            )
+            (
+                norm_encoder_hidden_states_base,
+                c_gate_msa_base,
+                c_shift_mlp_base,
+                c_scale_mlp_base,
+                c_gate_mlp_base,
+            ) = self.norm1_context(encoder_hidden_states_base, emb=temb)
         else:
             norm_encoder_hidden_states_base = None
 
@@ -233,7 +261,9 @@ class FluxTransformerBlock(nn.Module):
         hidden_states = hidden_states + attn_output
 
         norm_hidden_states = self.norm2(hidden_states)
-        norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+        norm_hidden_states = (
+            norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+        )
 
         ff_output = self.ff(norm_hidden_states)
         ff_output = gate_mlp.unsqueeze(1) * ff_output
@@ -246,25 +276,44 @@ class FluxTransformerBlock(nn.Module):
         encoder_hidden_states = encoder_hidden_states + context_attn_output
 
         norm_encoder_hidden_states = self.norm2_context(encoder_hidden_states)
-        norm_encoder_hidden_states = norm_encoder_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
+        norm_encoder_hidden_states = (
+            norm_encoder_hidden_states * (1 + c_scale_mlp[:, None])
+            + c_shift_mlp[:, None]
+        )
 
         context_ff_output = self.ff_context(norm_encoder_hidden_states)
-        encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
+        encoder_hidden_states = (
+            encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
+        )
         if encoder_hidden_states.dtype == torch.float16:
             encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
-        
-        # Process attention outputs for the `encoder_hidden_states_base`.
-        if encoder_hidden_states_base is not None:  
-            context_attn_output_base = c_gate_msa_base.unsqueeze(1) * context_attn_output_base
-            encoder_hidden_states_base = encoder_hidden_states_base + context_attn_output_base
 
-            norm_encoder_hidden_states_base = self.norm2_context(encoder_hidden_states_base)
-            norm_encoder_hidden_states_base = norm_encoder_hidden_states_base * (1 + c_scale_mlp_base[:, None]) + c_shift_mlp_base[:, None]
+        # Process attention outputs for the `encoder_hidden_states_base`.
+        if encoder_hidden_states_base is not None:
+            context_attn_output_base = (
+                c_gate_msa_base.unsqueeze(1) * context_attn_output_base
+            )
+            encoder_hidden_states_base = (
+                encoder_hidden_states_base + context_attn_output_base
+            )
+
+            norm_encoder_hidden_states_base = self.norm2_context(
+                encoder_hidden_states_base
+            )
+            norm_encoder_hidden_states_base = (
+                norm_encoder_hidden_states_base * (1 + c_scale_mlp_base[:, None])
+                + c_shift_mlp_base[:, None]
+            )
 
             context_ff_output_base = self.ff_context(norm_encoder_hidden_states_base)
-            encoder_hidden_states_base = encoder_hidden_states_base + c_gate_mlp_base.unsqueeze(1) * context_ff_output_base
+            encoder_hidden_states_base = (
+                encoder_hidden_states_base
+                + c_gate_mlp_base.unsqueeze(1) * context_ff_output_base
+            )
             if encoder_hidden_states_base.dtype == torch.float16:
-                encoder_hidden_states_base = encoder_hidden_states_base.clip(-65504, 65504)
+                encoder_hidden_states_base = encoder_hidden_states_base.clip(
+                    -65504, 65504
+                )
 
         if encoder_hidden_states_base is not None:
             return encoder_hidden_states, hidden_states, encoder_hidden_states_base
@@ -272,7 +321,9 @@ class FluxTransformerBlock(nn.Module):
             return encoder_hidden_states, hidden_states
 
 
-class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin):
+class FluxTransformer2DModel(
+    ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin
+):
     """
     The Transformer model introduced in Flux.
 
@@ -309,18 +360,25 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
     ):
         super().__init__()
         self.out_channels = in_channels
-        self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
+        self.inner_dim = (
+            self.config.num_attention_heads * self.config.attention_head_dim
+        )
 
         self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=axes_dims_rope)
 
         text_time_guidance_cls = (
-            CombinedTimestepGuidanceTextProjEmbeddings if guidance_embeds else CombinedTimestepTextProjEmbeddings
+            CombinedTimestepGuidanceTextProjEmbeddings
+            if guidance_embeds
+            else CombinedTimestepTextProjEmbeddings
         )
         self.time_text_embed = text_time_guidance_cls(
-            embedding_dim=self.inner_dim, pooled_projection_dim=self.config.pooled_projection_dim
+            embedding_dim=self.inner_dim,
+            pooled_projection_dim=self.config.pooled_projection_dim,
         )
 
-        self.context_embedder = nn.Linear(self.config.joint_attention_dim, self.inner_dim)
+        self.context_embedder = nn.Linear(
+            self.config.joint_attention_dim, self.inner_dim
+        )
         self.x_embedder = torch.nn.Linear(self.config.in_channels, self.inner_dim)
 
         self.transformer_blocks = nn.ModuleList(
@@ -345,8 +403,12 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
             ]
         )
 
-        self.norm_out = AdaLayerNormContinuous(self.inner_dim, self.inner_dim, elementwise_affine=False, eps=1e-6)
-        self.proj_out = nn.Linear(self.inner_dim, patch_size * patch_size * self.out_channels, bias=True)
+        self.norm_out = AdaLayerNormContinuous(
+            self.inner_dim, self.inner_dim, elementwise_affine=False, eps=1e-6
+        )
+        self.proj_out = nn.Linear(
+            self.inner_dim, patch_size * patch_size * self.out_channels, bias=True
+        )
 
         self.gradient_checkpointing = False
 
@@ -361,7 +423,11 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         # set recursively
         processors = {}
 
-        def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttentionProcessor]):
+        def fn_recursive_add_processors(
+            name: str,
+            module: torch.nn.Module,
+            processors: Dict[str, AttentionProcessor],
+        ):
             if hasattr(module, "get_processor"):
                 processors[f"{name}.processor"] = module.get_processor()
 
@@ -376,7 +442,9 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         return processors
 
     # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
+    def set_attn_processor(
+        self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]
+    ):
         r"""
         Sets the attention processor to use to compute attention.
 
@@ -426,7 +494,9 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
 
         for _, attn_processor in self.attn_processors.items():
             if "Added" in str(attn_processor.__class__.__name__):
-                raise ValueError("`fuse_qkv_projections()` is not supported for models having added KV projections.")
+                raise ValueError(
+                    "`fuse_qkv_projections()` is not supported for models having added KV projections."
+                )
 
         self.original_attn_processors = self.attn_processors
 
@@ -506,7 +576,10 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
             # weight the lora layers by setting `lora_scale` for each PEFT layer
             scale_lora_layers(self, lora_scale)
         else:
-            if joint_attention_kwargs is not None and joint_attention_kwargs.get("scale", None) is not None:
+            if (
+                joint_attention_kwargs is not None
+                and joint_attention_kwargs.get("scale", None) is not None
+            ):
                 logger.warning(
                     "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
                 )
@@ -525,20 +598,27 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
 
         # prepare additional kwargs for regional control
         additional_kwargs = {}
-        additional_kwargs["regional_attention_mask"] = joint_attention_kwargs['regional_attention_mask']
+        additional_kwargs["regional_attention_mask"] = joint_attention_kwargs[
+            "regional_attention_mask"
+        ]
         additional_kwargs["hidden_seq_len"] = hidden_states.shape[1]
         # when using controlnet, only one prompt is provided, so we need to consider the case
-        if encoder_hidden_states_base is not None:  
+        if encoder_hidden_states_base is not None:
             txt_ids_base = txt_ids
-            encoder_hidden_states_base = self.context_embedder(encoder_hidden_states_base)
-            additional_kwargs["encoder_seq_len_base"] = encoder_hidden_states_base.shape[1]
+            encoder_hidden_states_base = self.context_embedder(
+                encoder_hidden_states_base
+            )
+            additional_kwargs["encoder_seq_len_base"] = (
+                encoder_hidden_states_base.shape[1]
+            )
         else:
             encoder_hidden_states_base = None
         # prepare txt_ids for concatenated regional prompts
-        txt_ids = torch.zeros(encoder_hidden_states.shape[1], 3).to(device=txt_ids.device, dtype=txt_ids.dtype)
+        txt_ids = torch.zeros(encoder_hidden_states.shape[1], 3).to(
+            device=txt_ids.device, dtype=txt_ids.dtype
+        )
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
         additional_kwargs["encoder_seq_len"] = encoder_hidden_states.shape[1]
-        
 
         if txt_ids.ndim == 3:
             logger.warning(
@@ -575,36 +655,57 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
 
                     return custom_forward
 
-                ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                encoder_hidden_states, hidden_states = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    hidden_states,
-                    encoder_hidden_states,
-                    temb,
-                    image_rotary_emb,
-                    **ckpt_kwargs,
+                ckpt_kwargs: Dict[str, Any] = (
+                    {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                )
+                encoder_hidden_states, hidden_states = (
+                    torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(block),
+                        hidden_states,
+                        encoder_hidden_states,
+                        temb,
+                        image_rotary_emb,
+                        **ckpt_kwargs,
+                    )
                 )
 
             else:
-                encoder_hidden_states, hidden_states, encoder_hidden_states_base = block(
-                    hidden_states=hidden_states,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_hidden_states_base=encoder_hidden_states_base,
-                    base_ratio=base_ratio,
-                    temb=temb,
-                    image_rotary_emb=image_rotary_emb,
-                    image_rotary_emb_base=image_rotary_emb_base,
-                    additional_kwargs=additional_kwargs if index_block % joint_attention_kwargs['double_inject_blocks_interval'] == 0 else {k: v for k, v in additional_kwargs.items() if k != 'regional_attention_mask'}, # delete attention mask to avoid region control
+                encoder_hidden_states, hidden_states, encoder_hidden_states_base = (
+                    block(
+                        hidden_states=hidden_states,
+                        encoder_hidden_states=encoder_hidden_states,
+                        encoder_hidden_states_base=encoder_hidden_states_base,
+                        base_ratio=base_ratio,
+                        temb=temb,
+                        image_rotary_emb=image_rotary_emb,
+                        image_rotary_emb_base=image_rotary_emb_base,
+                        additional_kwargs=additional_kwargs
+                        if index_block
+                        % joint_attention_kwargs["double_inject_blocks_interval"]
+                        == 0
+                        else {
+                            k: v
+                            for k, v in additional_kwargs.items()
+                            if k != "regional_attention_mask"
+                        },  # delete attention mask to avoid region control
+                    )
                 )
 
             # controlnet residual
             if controlnet_block_samples is not None:
-                interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
+                interval_control = len(self.transformer_blocks) / len(
+                    controlnet_block_samples
+                )
                 interval_control = int(np.ceil(interval_control))
-                hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
-        
+                hidden_states = (
+                    hidden_states
+                    + controlnet_block_samples[index_block // interval_control]
+                )
+
         if encoder_hidden_states_base is not None:
-            hidden_states_base = torch.cat([encoder_hidden_states_base, hidden_states], dim=1)
+            hidden_states_base = torch.cat(
+                [encoder_hidden_states_base, hidden_states], dim=1
+            )
         else:
             hidden_states_base = None
 
@@ -622,7 +723,9 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
 
                     return custom_forward
 
-                ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                ckpt_kwargs: Dict[str, Any] = (
+                    {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                )
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(block),
                     hidden_states,
@@ -639,12 +742,22 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
                     image_rotary_emb_base=image_rotary_emb_base,
-                    additional_kwargs=additional_kwargs if index_block % joint_attention_kwargs['single_inject_blocks_interval'] == 0 else {k: v for k, v in additional_kwargs.items() if k != 'regional_attention_mask'}, # delete attention mask to avoid region control
+                    additional_kwargs=additional_kwargs
+                    if index_block
+                    % joint_attention_kwargs["single_inject_blocks_interval"]
+                    == 0
+                    else {
+                        k: v
+                        for k, v in additional_kwargs.items()
+                        if k != "regional_attention_mask"
+                    },  # delete attention mask to avoid region control
                 )
 
             # controlnet residual
             if controlnet_single_block_samples is not None:
-                interval_control = len(self.single_transformer_blocks) / len(controlnet_single_block_samples)
+                interval_control = len(self.single_transformer_blocks) / len(
+                    controlnet_single_block_samples
+                )
                 interval_control = int(np.ceil(interval_control))
                 hidden_states[:, encoder_hidden_states.shape[1] :, ...] = (
                     hidden_states[:, encoder_hidden_states.shape[1] :, ...]

@@ -4,35 +4,43 @@ from pipeline_flux_controlnet_regional import RegionalFluxControlNetPipeline
 from diffusers import FluxControlNetModel, FluxMultiControlNetModel
 
 if __name__ == "__main__":
-    
     model_path = "black-forest-labs/FLUX.1-dev"
-    
+
     use_lora = False
     use_controlnet = False
 
-    if use_controlnet: # takes up more gpu memory
+    if use_controlnet:  # takes up more gpu memory
         # READ https://huggingface.co/Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro for detailed usage tutorial
-        controlnet_model_union = 'Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro'
-        controlnet_union = FluxControlNetModel.from_pretrained(controlnet_model_union, torch_dtype=torch.bfloat16)
+        controlnet_model_union = "Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro"
+        controlnet_union = FluxControlNetModel.from_pretrained(
+            controlnet_model_union, torch_dtype=torch.bfloat16
+        )
         controlnet = FluxMultiControlNetModel([controlnet_union])
-        pipeline = RegionalFluxControlNetPipeline.from_pretrained(model_path, controlnet=controlnet, torch_dtype=torch.bfloat16).to("cuda")
+        pipeline = RegionalFluxControlNetPipeline.from_pretrained(
+            model_path, controlnet=controlnet, torch_dtype=torch.bfloat16
+        ).to("cuda")
     else:
-        pipeline = RegionalFluxPipeline.from_pretrained(model_path, torch_dtype=torch.bfloat16).to("cuda")
-    
+        pipeline = RegionalFluxPipeline.from_pretrained(
+            model_path, torch_dtype=torch.bfloat16
+        ).to("cuda")
+
     if use_lora:
         # READ https://huggingface.co/Shakker-Labs/FLUX.1-dev-LoRA-Children-Simple-Sketch for detailed usage tutorial
-        pipeline.load_lora_weights("Shakker-Labs/FLUX.1-dev-LoRA-Children-Simple-Sketch", weight_name="FLUX-dev-lora-children-simple-sketch.safetensors")
-    
+        pipeline.load_lora_weights(
+            "Shakker-Labs/FLUX.1-dev-LoRA-Children-Simple-Sketch",
+            weight_name="FLUX-dev-lora-children-simple-sketch.safetensors",
+        )
+
     attn_procs = {}
     for name in pipeline.transformer.attn_processors.keys():
-        if 'transformer_blocks' in name and name.endswith("attn.processor"):
+        if "transformer_blocks" in name and name.endswith("attn.processor"):
             attn_procs[name] = RegionalFluxAttnProcessor2_0()
         else:
             attn_procs[name] = pipeline.transformer.attn_processors[name]
     pipeline.transformer.set_attn_processor(attn_procs)
 
     ## generation settings
-    
+
     # example regional prompt and mask pairs
     image_width = 1280
     image_height = 768
@@ -45,7 +53,7 @@ if __name__ == "__main__":
     regional_prompt_mask_pairs = {
         "0": {
             "description": "A dignified woman in ancient robes stands in the foreground, her face illuminated by the torch she holds high. Her expression is one of determination and sorrow, her clothing and appearance reflecting the historical period. The torch casts dramatic shadows across her features, its flames dancing vibrantly against the darkness.",
-            "mask": [128, 128, 640, 768]
+            "mask": [128, 128, 640, 768],
         }
     }
     # region control settings
@@ -89,7 +97,6 @@ if __name__ == "__main__":
     # single_inject_blocks_interval = 2 # 1 for full blocks
     # base_ratio = 0.2
 
-
     # example input with lora enabled
     # image_width = 1280
     # image_height = 1280
@@ -105,7 +112,7 @@ if __name__ == "__main__":
     #         "mask": [0, 0, 640, 1280]
     #     },
     #     "1": {
-    #         "description": "Sketched style: city with colorful buildings and tiny flames gently floating above, adding a playful touch.", 
+    #         "description": "Sketched style: city with colorful buildings and tiny flames gently floating above, adding a playful touch.",
     #         "mask": [640, 0, 1280, 1280]
     #     }
     # }
@@ -121,15 +128,17 @@ if __name__ == "__main__":
     ## prepare regional prompts and masks
     # ensure image width and height are divisible by the vae scale factor
     image_width = (image_width // pipeline.vae_scale_factor) * pipeline.vae_scale_factor
-    image_height = (image_height // pipeline.vae_scale_factor) * pipeline.vae_scale_factor
+    image_height = (
+        image_height // pipeline.vae_scale_factor
+    ) * pipeline.vae_scale_factor
 
     regional_prompts = []
     regional_masks = []
     background_mask = torch.ones((image_height, image_width))
 
     for region_idx, region in regional_prompt_mask_pairs.items():
-        description = region['description']
-        mask = region['mask']
+        description = region["description"]
+        mask = region["mask"]
         x1, y1, x2, y2 = mask
 
         mask = torch.zeros((image_height, image_width))
@@ -139,7 +148,7 @@ if __name__ == "__main__":
 
         regional_prompts.append(description)
         regional_masks.append(mask)
-            
+
     # if regional masks don't cover the whole image, append background prompt and mask
     if background_mask.sum() > 0:
         regional_prompts.append(background_prompt)
@@ -147,18 +156,19 @@ if __name__ == "__main__":
 
     # setup regional kwargs that pass to the pipeline
     joint_attention_kwargs = {
-        'regional_prompts': regional_prompts,
-        'regional_masks': regional_masks,
-        'double_inject_blocks_interval': double_inject_blocks_interval,
-        'single_inject_blocks_interval': single_inject_blocks_interval,
-        'base_ratio': base_ratio,
+        "regional_prompts": regional_prompts,
+        "regional_masks": regional_masks,
+        "double_inject_blocks_interval": double_inject_blocks_interval,
+        "single_inject_blocks_interval": single_inject_blocks_interval,
+        "base_ratio": base_ratio,
     }
     # generate images
     if use_controlnet:
         images = pipeline(
             prompt=base_prompt,
             num_samples=num_samples,
-            width=image_width, height=image_height,
+            width=image_width,
+            height=image_height,
             mask_inject_steps=mask_inject_steps,
             control_image=control_image,
             control_mode=control_mode,
@@ -172,7 +182,8 @@ if __name__ == "__main__":
         images = pipeline(
             prompt=base_prompt,
             num_samples=num_samples,
-            width=image_width, height=image_height,
+            width=image_width,
+            height=image_height,
             mask_inject_steps=mask_inject_steps,
             guidance_scale=guidance_scale,
             num_inference_steps=num_inference_steps,
