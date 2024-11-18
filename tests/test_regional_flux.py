@@ -29,16 +29,6 @@ def device() -> torch.device:
 
 
 @pytest.fixture
-def image_width() -> int:
-    return 1280
-
-
-@pytest.fixture
-def image_height() -> int:
-    return 768
-
-
-@pytest.fixture
 def num_inference_steps() -> int:
     return 24
 
@@ -53,46 +43,57 @@ def seed() -> int:
     return 124
 
 
-@pytest.fixture
-def base_prompt() -> str:
-    return "An ancient woman stands solemnly holding a blazing torch, while a fierce battle rages in the background, capturing both strength and tragedy in a historical war scene."
-
-
-@pytest.fixture
-def background_prompt() -> str:
-    return "a photo"
-
-
-@pytest.fixture
-def regional_prompt_mask_pairs() -> Dict[str, RegionalPromptMask]:
-    return {
-        "0": {
-            "description": "A dignified woman in ancient robes stands in the foreground, her face illuminated by the torch she holds high. Her expression is one of determination and sorrow, her clothing and appearance reflecting the historical period. The torch casts dramatic shadows across her features, its flames dancing vibrantly against the darkness",
-            "mask": (128, 128, 640, 768),
-        }
-    }
-
-
-@pytest.fixture
-def mask_inject_steps() -> int:
-    return 10  # larger means stronger control, recommended between 5-10
-
-
-@pytest.fixture
-def double_inject_blocks_interval() -> int:
-    return 1  # 1 means strongest control
-
-
-@pytest.fixture
-def single_inject_blocks_interval() -> int:
-    return 1  # 1 means strongest control
-
-
-@pytest.fixture
-def base_ratio() -> float:
-    return 0.3  # smaller means stronger control
-
-
+@pytest.mark.parametrize(
+    argnames=(
+        "image_width",
+        "image_height",
+        "base_prompt",
+        "background_prompt",
+        "regional_prompt_mask_pairs",
+        "mask_inject_steps",
+        "double_inject_blocks_interval",
+        "single_inject_blocks_interval",
+        "base_ratio",
+    ),
+    argvalues=(
+        (
+            1280,
+            768,
+            "An ancient woman stands solemnly holding a blazing torch, while a fierce battle rages in the background, capturing both strength and tragedy in a historical war scene.",
+            "A photo",
+            {
+                "region-0": {
+                    "description": "A dignified woman in ancient robes stands in the foreground, her face illuminated by the torch she holds high. Her expression is one of determination and sorrow, her clothing and appearance reflecting the historical period. The torch casts dramatic shadows across her features, its flames dancing vibrantly against the darkness",
+                    "mask": (128, 128, 640, 768),
+                }
+            },
+            10,
+            1,
+            1,
+            0.3,
+        ),
+        (
+            1280,
+            1280,
+            "A tropical cocktail on a wooden table at a beach during sunset.",
+            "A photo",
+            {
+                "region-0": {
+                    "description": "A colorful cocktail in a glass with tropical fruits and a paper umbrella, with ice cubes and condensation.",
+                    "mask": (450, 560, 960, 900),
+                },
+                "region-1": {
+                    "description": "Weathered wooden table with seashells and a napkin.",
+                    "mask": (320, 900, 1280, 1280),
+                },
+            },
+            10,
+            1,
+            2,
+            0.1,
+        ),
+    ),
+)
 def test_pipeline_flux(
     model_id: str,
     device: torch.device,
@@ -140,7 +141,7 @@ def test_pipeline_flux(
     regional_prompts = []
     regional_masks = []
     background_mask = torch.ones((image_height, image_width))
-    for region_idx, region in regional_prompt_mask_pairs.items():
+    for region_name, region in regional_prompt_mask_pairs.items():
         description = region["description"]
         mask = region["mask"]
         x1, y1, x2, y2 = mask
@@ -172,4 +173,5 @@ def test_pipeline_flux(
         },
     ).images[0]
 
-    image.save("output.png")
+    filename = f'{"-".join(base_prompt.lower().split())}.png'
+    image.save(filename)
