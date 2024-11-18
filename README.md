@@ -9,6 +9,127 @@
 
 </div>
 
+## Installation
+
+```shell
+pip install git+https://github.com/creative-graphic-design/flux-regional-prompting
+```
+
+## How to Use
+
+```python
+import torch
+
+from flux_regional_prompting.models.attention_processor import (
+    RegionalFluxAttnProcessor2_0,
+)
+from flux_regional_prompting.models.transformers import RegionalFluxTransformer2DModel
+from flux_regional_prompting.pipelines import (
+    RegionalFluxPipeline,
+)
+
+model_id = "black-forest-labs/FLUX.1-dev"
+torch_dtype = torch.bfloat16
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+#
+# Load module and pipeline
+#
+transformer = RegionalFluxTransformer2DModel.from_pretrained(
+    model_id,
+    subfolder="transformer",
+)
+transformer = transformer.to(torch_dtype)
+
+pipe = RegionalFluxPipeline.from_pretrained(
+    model_id,
+    transformer=transformer,
+    torch_dtype=torch_dtype,
+)
+pipe = pipe.to(device)
+
+#
+# Replace `FluxAttnProcessor2_0` to RegionalFluxAttnProcessor2_0
+#
+attn_procs = {}
+for name in pipe.transformer.attn_processors.keys():
+    if "transformer_blocks" in name and name.endswith("attn.processor"):
+        attn_procs[name] = RegionalFluxAttnProcessor2_0()
+    else:
+        attn_procs[name] = pipe.transformer.attn_processors[name]
+pipe.transformer.set_attn_processor(attn_procs)
+
+#
+# Set hyperparameters
+#
+
+# General settings
+image_width, image_height = 1280, 768
+num_inference_steps = 24
+guidance_scale = 3.5
+seed = 124
+base_prompt = "An ancient woman stands solemnly holding a blazing torch, while a fierce battle rages in the background, capturing both strength and tragedy in a historical war scene."
+background_prompt = "a photo"  # set by default, but if you want to enrich background, you can set it to a more descriptive prompt
+regional_prompt_mask_pairs = {
+    "0": {
+        "description": "A dignified woman in ancient robes stands in the foreground, her face illuminated by the torch she holds high. Her expression is one of determination and sorrow, her clothing and appearance reflecting the historical period. The torch casts dramatic shadows across her features, its flames dancing vibrantly against the darkness.",
+        "mask": [128, 128, 640, 768],
+    }
+}
+
+## region control factor settings
+mask_inject_steps = 10  # larger means stronger control, recommended between 5-10
+double_inject_blocks_interval = 1  # 1 means strongest control
+single_inject_blocks_interval = 1  # 1 means strongest control
+base_ratio = 0.2  # smaller means stronger control
+
+#
+# Prepare regional masks
+#
+regional_prompts = []
+regional_masks = []
+background_mask = torch.ones((image_height, image_width))
+for region_name, region in regional_prompt_mask_pairs.items():
+    description = region["description"]
+    mask = region["mask"]
+    x1, y1, x2, y2 = mask
+    mask = torch.zeros((image_height, image_width))
+    mask[y1:y2, x1:x2] = 1.0
+    background_mask -= mask
+    regional_prompts.append(description)
+    regional_masks.append(mask)
+
+# if regional masks don't cover the whole image, append background prompt and mask
+if background_mask.sum() > 0:
+    regional_prompts.append(background_prompt)
+    regional_masks.append(background_mask)
+
+#
+# Generate image with `RegionalFluxPipeline`
+#
+image = pipe(
+    prompt=base_prompt,
+    width=image_width,
+    height=image_height,
+    mask_inject_steps=mask_inject_steps,
+    guidance_scale=guidance_scale,
+    num_inference_steps=num_inference_steps,
+    generator=torch.Generator(device).manual_seed(seed),
+    joint_attention_kwargs={
+        "regional_prompts": regional_prompts,
+        "regional_masks": regional_masks,
+        "double_inject_blocks_interval": double_inject_blocks_interval,
+        "single_inject_blocks_interval": single_inject_blocks_interval,
+        "base_ratio": base_ratio,
+    },
+).images[0]
+
+filename = f'{"-".join(base_prompt.lower().split())}.png'
+image.save(filename)
+```
+
+---
+
 Training-free Regional Prompting for Diffusion Transformers(Regional-Prompting-FLUX) enables Diffusion Transformers (i.e., FLUX) with find-grained compositional text-to-image generation capability in a training-free manner. Empirically, we show that our method is highly effective and compatible with LoRA and ControlNet.
 
 <!-- <img src='assets/pipe.png'> -->
