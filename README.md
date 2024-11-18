@@ -114,7 +114,7 @@ image = pipe(
     mask_inject_steps=mask_inject_steps,
     guidance_scale=guidance_scale,
     num_inference_steps=num_inference_steps,
-    generator=torch.manual_seed(seed),
+    generator=torch.Generator(device).manual_seed(seed),
     joint_attention_kwargs={
         "regional_prompts": regional_prompts,
         "regional_masks": regional_masks,
