@@ -17,18 +17,17 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
-
 from diffusers.image_processor import PipelineImageInput
-from diffusers.utils import (
-    is_torch_xla_available,
-    logging,
-)
-from diffusers.pipelines.flux.pipeline_output import FluxPipelineOutput
 from diffusers.models.controlnet_flux import (
     FluxControlNetModel,
     FluxMultiControlNetModel,
 )
-from diffusers.pipelines.flux.pipeline_flux_controlnet import *
+from diffusers.pipelines.flux.pipeline_flux_controlnet import FluxControlNetPipeline
+from diffusers.pipelines.flux.pipeline_output import FluxPipelineOutput
+from diffusers.utils import (
+    is_torch_xla_available,
+    logging,
+)
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
